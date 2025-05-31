@@ -1,0 +1,31 @@
+{
+  "name": "brightdata-proxy",
+  "version": "1.0.0",
+  "description": "Proxy server for Bright Data SERP API integration with Bless Network WASM",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "deploy": "npm run start"
+  },
+  "keywords": [
+    "proxy",
+    "bright-data",
+    "serp-api",
+    "bless-network",
+    "wasm"
+  ],
+  "author": "Mirror Search Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+} 

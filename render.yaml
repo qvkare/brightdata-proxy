@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: mirror-search-proxy
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: BRIGHT_DATA_API_TOKEN
+        value: ""
+      - key: BRIGHT_DATA_ZONE
+        value: serp_api1
+      - key: PORT
+        value: 10000 
