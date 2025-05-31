@@ -188,7 +188,29 @@ function parseGoogleHTML(html, query) {
       }
     }
     
-    // Match titles with links
+    // Pattern for snippets
+    const snippetPattern = /<div class="[^"]*VwiC3b[^"]*"[^>]*>(.*?)<\/div>/g;
+    const snippets = [];
+    let snippetMatch;
+    
+    while ((snippetMatch = snippetPattern.exec(html)) !== null) {
+      // Clean up HTML tags and entities
+      let snippet = snippetMatch[1]
+        .replace(/<[^>]*>/g, '') // Remove HTML tags
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim();
+        
+      if (snippet && snippet.length > 5) {
+        snippets.push(snippet);
+      }
+    }
+    
+    // Match titles with links and snippets
     const maxResults = Math.min(titles.length, links.length, 10);
     
     for (let i = 0; i < maxResults; i++) {
@@ -196,7 +218,7 @@ function parseGoogleHTML(html, query) {
         results.push({
           title: titles[i],
           url: links[i],
-          snippet: `Search result for "${query}" from Google via Bright Data SERP API`,
+          snippet: snippets[i] || `Result for "${query}" from Google search`,
           source: 'Bright Data SERP'
         });
       }
