@@ -30,6 +30,9 @@ app.use(cors({
   credentials: true
 }));
 
+// Manually handle OPTIONS requests for all routes
+app.options('*', cors()); // This will use the above cors configuration for OPTIONS pre-flight checks
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
