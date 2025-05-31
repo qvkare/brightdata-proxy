@@ -7,6 +7,14 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
+
+// ---- START NEW TOP-LEVEL MIDDLEWARE ----
+app.use((req, res, next) => {
+  console.log(`TOP_LEVEL_MW: Method: ${req.method}, Path: ${req.path}, Headers: ${JSON.stringify(req.headers)}`);
+  next();
+});
+// ---- END NEW TOP-LEVEL MIDDLEWARE ----
+
 const PORT = process.env.PORT || 3001;
 
 // Security middleware
@@ -265,9 +273,6 @@ function parseGoogleHTML(html, query) {
   
   return results;
 }
-
-// CORS preflight
-app.options('*', cors());
 
 // 404 handler
 app.use('*', (req, res) => {
