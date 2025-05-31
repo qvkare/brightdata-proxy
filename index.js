@@ -178,6 +178,108 @@ app.post('/api/brightdata', async (req, res) => {
   }
 });
 
+// ---- START NEW GET ROUTE FOR TEMPORARY WORKAROUND ----
+app.get('/api/brightdataget', async (req, res) => {
+  const incomingHeaders = JSON.stringify(req.headers);
+  // Using a slightly different log prefix to distinguish from TOP_LEVEL_MW for POST
+  console.log(`GET_ROUTE_ENTRY: Path /api/brightdataget. Headers: ${incomingHeaders}`);
+
+  const { query, num = '10', hl = 'en', gl = 'us' } = req.query; // num, hl, gl can also be query params
+  const queryParamsForDebug = JSON.stringify(req.query);
+  console.log(`PROXY_DEBUG_GET: Path /api/brightdataget. Extracted Query from URL: '${query}'. All query params: ${queryParamsForDebug}`);
+
+  if (!query || typeof query !== 'string' || query.trim().length === 0) {
+    console.error(`PROXY_ERROR_GET: Invalid query parameter. Extracted Query: '${query}', Type: ${typeof query}.`);
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid query parameter',
+      message: 'Query must be a non-empty string (from GET).',
+      debug_proxy_received_query_params: queryParamsForDebug,
+    });
+  }
+
+  try {
+    if (!BRIGHT_DATA_CONFIG.apiToken) {
+      console.error('PROXY_ERROR_GET: Bright Data API token not configured on server.');
+      return res.status(500).json({
+        success: false,
+        error: 'Configuration error',
+        message: 'Bright Data API token not configured'
+      });
+    }
+    
+    const brightDataRequest = {
+      zone: BRIGHT_DATA_CONFIG.zone,
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${encodeURIComponent(num)}&hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`,
+      format: 'raw'
+    };
+    
+    console.log(`PROXY_INTERNAL_POST_TO_BRIGHTDATA_GET_ROUTE: Request to BrightData: ${JSON.stringify(brightDataRequest)}`);
+
+    const brightDataResponse = await fetch(BRIGHT_DATA_CONFIG.apiUrl, {
+      method: 'POST', // This remains POST to Bright Data
+      headers: {
+        'Authorization': `Bearer ${BRIGHT_DATA_CONFIG.apiToken}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mirror Search Proxy v1.0 (via GET->POST)'
+      },
+      body: JSON.stringify(brightDataRequest)
+    });
+
+    if (!brightDataResponse.ok) {
+      const errorText = await brightDataResponse.text();
+      console.error(`PROXY_ERROR_GET: Bright Data API call failed. Status: ${brightDataResponse.status}, Details: ${errorText.substring(0,200)}`);
+      return res.status(502).json({
+        success: false,
+        error: 'Bright Data API error (via GET->POST)',
+        status: brightDataResponse.status,
+        statusText: brightDataResponse.statusText,
+        details: errorText.substring(0, 200)
+      });
+    }
+
+    const htmlContent = await brightDataResponse.text();
+    const results = parseGoogleHTML(htmlContent, query); // Assuming parseGoogleHTML is defined elsewhere in your file
+
+    if (!results || results.length === 0) {
+        return res.json({
+            success: true,
+            query: query,
+            results: [
+              {
+                title: `No results for \\"${query}\\"`,
+                url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+                snippet: "No search results were found. Try using different keywords.",
+                source: "Bright Data SERP (via GET->POST Proxy)"
+              }
+            ],
+            totalResults: 1,
+            source: 'Bright Data SERP (via GET->POST Proxy)',
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    return res.json({
+      success: true,
+      query: query,
+      results: results,
+      totalResults: results.length,
+      source: 'Bright Data SERP (via GET->POST Proxy)',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('PROXY_ERROR_GET: Unhandled error in /api/brightdataget:', error.message, error.stack);
+    return res.status(500).json({
+      success: false,
+      error: 'Proxy server error (via GET->POST)',
+      message: error.message || 'Unknown error',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+// ---- END NEW GET ROUTE FOR TEMPORARY WORKAROUND ----
+
 // Google HTML parser function
 function parseGoogleHTML(html, query) {
   if (!html || typeof html !== 'string') {
