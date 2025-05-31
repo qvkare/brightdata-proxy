@@ -57,21 +57,27 @@ app.get('/health', (req, res) => {
 
 // Main proxy endpoint for Bright Data SERP API
 app.post('/api/brightdata', async (req, res) => {
+  // Log incoming request details immediately
+  const incomingContentType = req.get('Content-Type');
+  const bodyAsReceivedByExpress = JSON.stringify(req.body); // Capture body as parsed by express.json()
+  console.log(`PROXY_DEBUG: Path /api/brightdata. Content-Type: '${incomingContentType}'. Body from express.json(): ${bodyAsReceivedByExpress}`);
+
   try {
-    // Destructure with defaults
+    // Destructure with defaults from req.body (which should be populated by express.json)
     const { query, num = 10, hl = 'en', gl = 'us' } = req.body || {};
 
-    // For debugging: Capture the state of req.body and the extracted query
-    const requestBodyDebug = JSON.stringify(req.body);
-    const queryValueDebug = String(query); // Convert to string for consistent logging
+    // For debugging: Capture the state of the extracted query
+    const queryValueDebug = String(query); 
     const queryTypeDebug = typeof query;
 
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
+      // This is the error path, log what was extracted from the (potentially empty) body
+      console.error(`PROXY_ERROR: Invalid query parameter. Extracted Query: '${queryValueDebug}', Type: ${queryTypeDebug}. Original req.body by express.json: ${bodyAsReceivedByExpress}`);
       return res.status(400).json({
         success: false,
         error: 'Invalid query parameter',
         message: 'Query must be a non-empty string.',
-        debug_proxy_received_body: requestBodyDebug,
+        debug_proxy_received_body: bodyAsReceivedByExpress, // Send back what express.json() provided
         debug_proxy_extracted_query_value: queryValueDebug,
         debug_proxy_extracted_query_type: queryTypeDebug
       });
@@ -79,6 +85,7 @@ app.post('/api/brightdata', async (req, res) => {
     
     // Validate configuration
     if (!BRIGHT_DATA_CONFIG.apiToken) {
+      console.error('PROXY_ERROR: Bright Data API token not configured on server.');
       return res.status(500).json({
         success: false,
         error: 'Configuration error',
@@ -106,7 +113,7 @@ app.post('/api/brightdata', async (req, res) => {
 
     if (!brightDataResponse.ok) {
       const errorText = await brightDataResponse.text();
-      
+      console.error(`PROXY_ERROR: Bright Data API call failed. Status: ${brightDataResponse.status}, Details: ${errorText.substring(0,200)}`);
       return res.status(502).json({
         success: false,
         error: 'Bright Data API error',
@@ -150,7 +157,7 @@ app.post('/api/brightdata', async (req, res) => {
     });
 
   } catch (error) {
-    // Ensure clean JSON response for error cases
+    console.error('PROXY_ERROR: Unhandled error in /api/brightdata:', error);
     return res.status(500).json({
       success: false,
       error: 'Proxy server error',
