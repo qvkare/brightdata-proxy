@@ -58,16 +58,25 @@ app.get('/health', (req, res) => {
 // Main proxy endpoint for Bright Data SERP API
 app.post('/api/brightdata', async (req, res) => {
   try {
-    const { query, num = 10, hl = 'en', gl = 'us' } = req.body;
-    
-    if (!query || typeof query !== 'string') {
+    // Destructure with defaults
+    const { query, num = 10, hl = 'en', gl = 'us' } = req.body || {};
+
+    // For debugging: Capture the state of req.body and the extracted query
+    const requestBodyDebug = JSON.stringify(req.body);
+    const queryValueDebug = String(query); // Convert to string for consistent logging
+    const queryTypeDebug = typeof query;
+
+    if (!query || typeof query !== 'string' || query.trim().length === 0) {
       return res.status(400).json({
         success: false,
         error: 'Invalid query parameter',
-        message: 'Query must be a non-empty string'
+        message: 'Query must be a non-empty string.',
+        debug_proxy_received_body: requestBodyDebug,
+        debug_proxy_extracted_query_value: queryValueDebug,
+        debug_proxy_extracted_query_type: queryTypeDebug
       });
     }
-
+    
     // Validate configuration
     if (!BRIGHT_DATA_CONFIG.apiToken) {
       return res.status(500).json({
