@@ -293,128 +293,125 @@ function parseGoogleHTMLWithCheerio(html, query) {
   const results = [];
   const seenUrls = new Set(); // Yinelenen URL'leri engellemek için
 
-  // Google'ın organik sonuçlarını içeren genel bir konteyner seçicisi.
-  // Bu seçici, Google'ın A/B testleri ve güncellemeleri nedeniyle değişebilir.
-  // Genellikle `#search .g`, `div.g`, `div.hlcw0c`, `div.kvH3mc`, `div.Ww4FFb` gibi sınıflar kullanılır.
-  // Birden fazla potansiyel seçiciyi deneyebiliriz.
-  const resultContainers = $('#search .g, div.g, div.hlcw0c, div.kvH3mc, div.Ww4FFb');
+  // Target common modern result blocks. .tF2Cxc is a strong candidate.
+  // Also include .kvH3mc and #search .g as fallbacks or alternatives.
+  const resultBlocks = $('div.tF2Cxc, div.kvH3mc, #search div.g'); 
   
-  // console.log(`PROXY_PARSE_INFO: Found ${resultContainers.length} potential result containers.`);
+  // console.log(`PROXY_PARSE_INFO: Found ${resultBlocks.length} potential result blocks using main selectors.`);
 
-  resultContainers.each((i, el) => {
+  resultBlocks.each((i, el) => {
     if (results.length >= 10) return false; // En fazla 10 sonuç al
 
     const resultElement = $(el);
 
-    // Reklamları ve bazı özel blokları atla
-    // Bilinen reklam seçicileri veya içeren metinler
+    // Skip known ad / special content patterns
     if (resultElement.closest('[data-text-ad="1"]').length > 0 ||
         resultElement.find('span:contains("Ad"), span:contains("Sponsored")').length > 0 ||
         resultElement.find('div[role="region"][aria-label*="Ads"]').length > 0 ||
-        resultElement.css('display') === 'none' || // Görünmeyen elementleri atla
-        resultElement.find('[data-hveid][data-ved]').text().trim() === "" // Bazen boş konteynerler olabilir
-    ) {
-      // console.log('PROXY_PARSE_INFO: Skipping ad or irrelevant block.');
-      return; // Bu bir reklam veya alakasız blok, atla
-    }
-
-    // "People also ask", "Related searches" gibi özel blokları atlama girişimleri
-    if (resultElement.find('div[data-nosnippet="true"]').length > 0 ||
-        resultElement.find('g-accordion-expander').length > 0 || // "People also ask" için yaygın
+        resultElement.find('div[data-nosnippet="true"]').length > 0 || // "Featured snippets" etc.
+        resultElement.find('g-accordion-expander').length > 0 || // "People also ask"
         resultElement.find('div[role="heading"][aria-level="2"]:contains("People also ask")').length > 0 ||
         resultElement.find('div[role="heading"][aria-level="2"]:contains("Related searches")').length > 0 ||
         resultElement.find('div[role="heading"][aria-level="2"]:contains("Top stories")').length > 0 ||
-        resultElement.find('div[role="heading"][aria-level="2"]:contains("Videos")').length > 0 ) {
-        // console.log('PROXY_PARSE_INFO: Skipping special block (PAA, Related, etc.).');
-      return;
+        resultElement.find('div[role="heading"][aria-level="2"]:contains("Videos")').length > 0 ||
+        resultElement.css('display') === 'none' // Görünmeyen elementleri atla
+    ) {
+      // console.log('PROXY_PARSE_SKIP: Skipping ad or special block.');
+      return; // Bu bir reklam veya alakasız blok, atla
     }
     
     // Boş veya çok kısa blokları atla
     if (resultElement.text().trim().length < 50) { // Eşik değeri ayarlanabilir
-        // console.log('PROXY_PARSE_INFO: Skipping short/empty block.');
+        // console.log('PROXY_PARSE_SKIP: Skipping short/empty block.');
         return;
     }
 
-    const titleElement = resultElement.find('h3').first(); // Genellikle başlık h3 içindedir
-    let title = titleElement.text().trim();
+    // More specific extraction based on common structures like .yuRUbf for link/title
+    let title = '';
+    let url = '';
+    let snippet = '';
+
+    // Try to find link and title within common containers like .yuRUbf or a link with jsname="UWckNb"
+    const linkElement = resultElement.find('div.yuRUbf > a[href], a[jsname="UWckNb"][href]').first();
     
-    // Bazen başlık h3'ün içindeki bir linkin metni olabilir
-    if (!title && titleElement.find('a').length > 0) {
-        title = titleElement.find('a').first().text().trim();
+    if (linkElement.length > 0) {
+        url = linkElement.attr('href');
+        title = linkElement.find('h3, div[role="heading"][aria-level="3"]').first().text().trim();
+    } else {
+        // Fallback to broader selectors if specific structure isn't found directly in resultElement
+        const genericLink = resultElement.find('a[href]').first(); // Find the first link in the block
+        if (genericLink.length > 0) {
+            url = genericLink.attr('href');
+            // Try to find the title associated with this generic link or within the block
+            title = genericLink.find('h3').first().text().trim() || 
+                    resultElement.find('h3, div[role="heading"][aria-level="3"]').first().text().trim();
+        } else {
+            // If no link found at all, likely not a result item
+            // console.log('PROXY_PARSE_SKIP: No link element found in a potential result block.');
+            return;
+        }
     }
-    // Alternatif başlık seçicileri (Google yapısı değişirse)
-    if (!title) {
-        title = resultElement.find('a[h="ID=SERP"] h3').first().text().trim();
-    }
-     if (!title) {
-        title = resultElement.find('div[role="heading"][aria-level="3"]').first().text().trim();
-    }
-
-
-    const linkElement = resultElement.find('a[href]').first(); // İlk anlamlı linki al
-    let url = linkElement.attr('href');
-
+    
+    // Clean URL if it's a Google redirect
     if (url && url.startsWith('/url?q=')) {
       const urlParams = new URLSearchParams(url.substring(url.indexOf('?')));
       url = urlParams.get('q') || url;
     }
 
-    // URL'leri doğrula ve filtrele
+    // URL validation (critical)
     if (!url || !url.startsWith('http') || 
-        url.includes('google.com/search') || 
+        url.includes('google.com/search?') || // More specific to avoid filtering actual google blog/docs
         url.includes('google.com/imgres') ||
         url.includes('google.com/maps') ||
         url.includes('google.com/preferences') ||
         url.includes('accounts.google.com') ||
-        url.includes('support.google.com') ||
+        url.includes('support.google.com/websearch/answer') || // Example of specific support pages
         url.includes('policies.google.com') ||
         url.includes('webcache.googleusercontent.com') ||
-        seenUrls.has(url) // Yinelenenleri atla
+        seenUrls.has(url)
        ) {
-      // console.log(`PROXY_PARSE_INFO: Skipping invalid or Google-internal URL: ${url}`);
+      // console.log(`PROXY_PARSE_SKIP: Skipping invalid/internal/duplicate URL: ${url}`);
       return;
     }
-
-    // Snippet'i al (çeşitli potansiyel seçiciler)
-    let snippet = resultElement.find('div.VwiC3b, div.s, div.st, div[data-sncf="1"], div.Uroaid').first().text().trim();
-    // Bazen snippet birden fazla span içinde bölünebilir
-    if (!snippet) {
-        snippet = resultElement.find('div[style="-webkit-line-clamp:2"], div[style="-webkit-line-clamp:3"]').first().text().trim();
-    }
-     if (!snippet) {
-        // En genel fallback, blok içindeki metin
-        let potentialSnippet = "";
+    
+    // Snippet extraction (VwiC3b is common, Uroaid is another)
+    snippet = resultElement.find('div.VwiC3b, div.Uroaid, div.s, div.st, div[data-sncf="1"]').first().text().trim();
+    
+    if (!snippet) { 
+        // Fallback: Collect text from significant spans not part of the title/link structure.
+        let potentialSnippetText = "";
         resultElement.find('span').each((idx, spanEl) => {
-            const spanText = $(spanEl).text().trim();
-            if (spanText.length > 20) { // Çok kısa spanları atla
-                potentialSnippet += spanText + " ";
+            const $span = $(spanEl);
+            // Avoid spans that are part of link/title elements or very short
+            if ($span.closest('h3, div.yuRUbf, a[href]').length === 0 && $span.text().trim().length > 15) {
+                potentialSnippetText += $span.text().trim() + " ";
             }
         });
-        snippet = potentialSnippet.trim();
+        snippet = potentialSnippetText.trim().substring(0, 350); // Limit snippet length
     }
 
 
-    if (title && url && title.length > 5 && snippet.length > 10) { // Temel geçerlilik kontrolü
+    if (title && url && title.length > 3 && snippet.length > 10) { // Adjusted length checks slightly
       results.push({
         title: title,
         url: url,
         snippet: snippet,
         source: 'Bright Data SERP (Cheerio)'
       });
-      seenUrls.add(url); // Görülen URL'lere ekle
+      seenUrls.add(url);
     } else {
-      // console.log(`PROXY_PARSE_WARN: Missing title, URL, or snippet for a block. Title: "${title}", URL: "${url}"`);
+      // console.log(`PROXY_PARSE_WARN: Missing or invalid title, URL, or snippet. Title: "${title}", URL: "${url}", Snippet Length: "${snippet.length}"`);
     }
   });
   
-  // console.log(`PROXY_PARSE_INFO: Extracted ${results.length} results using Cheerio.`);
+  // console.log(`PROXY_PARSE_INFO: Extracted ${results.length} results after loop.`);
 
   if (results.length === 0) {
-    // console.warn(`PROXY_PARSE_WARN: No results extracted for query "${query}". Returning fallback.`);
+    // console.warn(`PROXY_PARSE_FINAL_WARN: No organic results extracted for query "${query}". Returning fallback.`);
     return [{
       title: `No organic results found for "${query}"`,
       url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-      snippet: "Could not extract organic search results. Google\'s HTML structure might have changed or no relevant results were found.",
+      snippet: "Could not extract organic search results. Google's HTML structure might have changed or no relevant results were found.",
       source: "Bright Data SERP (Cheerio Fallback)"
     }];
   }
