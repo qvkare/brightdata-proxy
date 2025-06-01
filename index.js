@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -137,7 +138,7 @@ app.post('/api/brightdata', async (req, res) => {
     const htmlContent = await brightDataResponse.text();
 
     // Parse Google HTML results
-    const results = parseGoogleHTML(htmlContent, query);
+    const results = parseGoogleHTMLWithCheerio(htmlContent, query);
 
     // Return structured response with error handling
     if (!results || results.length === 0) {
@@ -178,99 +179,245 @@ app.post('/api/brightdata', async (req, res) => {
   }
 });
 
-// Google HTML parser function
-function parseGoogleHTML(html, query) {
-  if (!html || typeof html !== 'string') {
-    return [];
+// ---- START NEW GET ROUTE FOR TEMPORARY WORKAROUND ----
+app.get('/api/brightdataget', async (req, res) => {
+  const incomingHeaders = JSON.stringify(req.headers);
+  // Using a slightly different log prefix to distinguish from TOP_LEVEL_MW for POST
+  console.log(`GET_ROUTE_ENTRY: Path /api/brightdataget. Headers: ${incomingHeaders}`);
+
+  const { query, num = '10', hl = 'en', gl = 'us' } = req.query; // num, hl, gl can also be query params
+  const queryParamsForDebug = JSON.stringify(req.query);
+  console.log(`PROXY_DEBUG_GET: Path /api/brightdataget. Extracted Query from URL: '${query}'. All query params: ${queryParamsForDebug}`);
+
+  if (!query || typeof query !== 'string' || query.trim().length === 0) {
+    console.error(`PROXY_ERROR_GET: Invalid query parameter. Extracted Query: '${query}', Type: ${typeof query}.`);
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid query parameter',
+      message: 'Query must be a non-empty string (from GET).',
+      debug_proxy_received_query_params: queryParamsForDebug,
+    });
   }
-  
-  const results = [];
-  
+
   try {
-    // Pattern for Google search results
-    const titlePattern = /<h3[^>]*class="[^"]*LC20lb[^"]*"[^>]*>([^<]*)<\/h3>/g;
-    const titles = [];
-    let titleMatch;
-    
-    while ((titleMatch = titlePattern.exec(html)) !== null) {
-      titles.push(titleMatch[1].replace(/&amp;/g, '&').trim());
-    }
-    
-    // Pattern for links
-    const linkPattern = /<a[^>]*href="([^"]*)"[^>]*>/g;
-    const links = [];
-    let linkMatch;
-    
-    while ((linkMatch = linkPattern.exec(html)) !== null) {
-      const url = linkMatch[1];
-      
-      // Filter external links only
-      if (url.startsWith('http') && 
-          !url.includes('google.com/url') && 
-          !url.includes('google.com/search') &&
-          !url.includes('webcache.googleusercontent.com') &&
-          !url.includes('accounts.google') &&
-          !url.includes('policies.google')) {
-        links.push(url);
-      }
-    }
-    
-    // Pattern for snippets
-    const snippetPattern = /<div class="[^"]*VwiC3b[^"]*"[^>]*>(.*?)<\/div>/g;
-    const snippets = [];
-    let snippetMatch;
-    
-    while ((snippetMatch = snippetPattern.exec(html)) !== null) {
-      // Clean up HTML tags and entities
-      let snippet = snippetMatch[1]
-        .replace(/<[^>]*>/g, '') // Remove HTML tags
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/\s+/g, ' ') // Normalize whitespace
-        .trim();
-        
-      if (snippet && snippet.length > 5) {
-        snippets.push(snippet);
-      }
-    }
-    
-    // Match titles with links and snippets
-    const maxResults = Math.min(titles.length, links.length, 10);
-    
-    for (let i = 0; i < maxResults; i++) {
-      if (titles[i] && links[i]) {
-        results.push({
-          title: titles[i],
-          url: links[i],
-          snippet: snippets[i] || `Result for "${query}" from Google search`,
-          source: 'Bright Data SERP'
-        });
-      }
-    }
-    
-    // Fallback if no results found
-    if (results.length === 0) {
-      results.push({
-        title: `Search results for "${query}"`,
-        url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-        snippet: "No specific results extracted. Try using different keywords.",
-        source: "Bright Data SERP"
+    if (!BRIGHT_DATA_CONFIG.apiToken) {
+      console.error('PROXY_ERROR_GET: Bright Data API token not configured on server.');
+      return res.status(500).json({
+        success: false,
+        error: 'Configuration error',
+        message: 'Bright Data API token not configured'
       });
     }
     
+    const brightDataRequest = {
+      zone: BRIGHT_DATA_CONFIG.zone,
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${encodeURIComponent(num)}&hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`,
+      format: 'raw'
+    };
+    
+    console.log(`PROXY_INTERNAL_POST_TO_BRIGHTDATA_GET_ROUTE: Request to BrightData: ${JSON.stringify(brightDataRequest)}`);
+
+    const brightDataResponse = await fetch(BRIGHT_DATA_CONFIG.apiUrl, {
+      method: 'POST', // This remains POST to Bright Data
+      headers: {
+        'Authorization': `Bearer ${BRIGHT_DATA_CONFIG.apiToken}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mirror Search Proxy v1.0 (via GET->POST)'
+      },
+      body: JSON.stringify(brightDataRequest)
+    });
+
+    if (!brightDataResponse.ok) {
+      const errorText = await brightDataResponse.text();
+      console.error(`PROXY_ERROR_GET: Bright Data API call failed. Status: ${brightDataResponse.status}, Details: ${errorText.substring(0,200)}`);
+      return res.status(502).json({
+        success: false,
+        error: 'Bright Data API error (via GET->POST)',
+        status: brightDataResponse.status,
+        statusText: brightDataResponse.statusText,
+        details: errorText.substring(0, 200)
+      });
+    }
+
+    const htmlContent = await brightDataResponse.text();
+    const results = parseGoogleHTMLWithCheerio(htmlContent, query);
+
+    if (!results || results.length === 0) {
+        return res.json({
+            success: true,
+            query: query,
+            results: [
+              {
+                title: `No results for \\"${query}\\"`,
+                url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+                snippet: "No search results were found. Try using different keywords.",
+                source: "Bright Data SERP (via GET->POST Proxy)"
+              }
+            ],
+            totalResults: 1,
+            source: 'Bright Data SERP (via GET->POST Proxy)',
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    return res.json({
+      success: true,
+      query: query,
+      results: results,
+      totalResults: results.length,
+      source: 'Bright Data SERP (via GET->POST Proxy)',
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
-    // Provide a fallback result on parser error
-    results.push({
-      title: `Search results for "${query}"`,
-      url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-      snippet: "Error parsing results. Try again with different keywords.",
-      source: "Bright Data SERP"
+    console.error('PROXY_ERROR_GET: Unhandled error in /api/brightdataget:', error.message, error.stack);
+    return res.status(500).json({
+      success: false,
+      error: 'Proxy server error (via GET->POST)',
+      message: error.message || 'Unknown error',
+      timestamp: new Date().toISOString()
     });
   }
+});
+// ---- END NEW GET ROUTE FOR TEMPORARY WORKAROUND ----
+
+// Google HTML parser function with Cheerio
+function parseGoogleHTMLWithCheerio(html, query) {
+  if (!html || typeof html !== 'string') {
+    console.warn('PROXY_PARSE_WARN: HTML content is missing or not a string.');
+    return [];
+  }
   
+  const $ = cheerio.load(html);
+  const results = [];
+  const seenUrls = new Set(); // Yinelenen URL'leri engellemek için
+
+  // Google'ın organik sonuçlarını içeren genel bir konteyner seçicisi.
+  // Bu seçici, Google'ın A/B testleri ve güncellemeleri nedeniyle değişebilir.
+  // Genellikle `#search .g`, `div.g`, `div.hlcw0c`, `div.kvH3mc`, `div.Ww4FFb` gibi sınıflar kullanılır.
+  // Birden fazla potansiyel seçiciyi deneyebiliriz.
+  const resultContainers = $('#search .g, div.g, div.hlcw0c, div.kvH3mc, div.Ww4FFb');
+  
+  // console.log(`PROXY_PARSE_INFO: Found ${resultContainers.length} potential result containers.`);
+
+  resultContainers.each((i, el) => {
+    if (results.length >= 10) return false; // En fazla 10 sonuç al
+
+    const resultElement = $(el);
+
+    // Reklamları ve bazı özel blokları atla
+    // Bilinen reklam seçicileri veya içeren metinler
+    if (resultElement.closest('[data-text-ad="1"]').length > 0 ||
+        resultElement.find('span:contains("Ad"), span:contains("Sponsored")').length > 0 ||
+        resultElement.find('div[role="region"][aria-label*="Ads"]').length > 0 ||
+        resultElement.css('display') === 'none' || // Görünmeyen elementleri atla
+        resultElement.find('[data-hveid][data-ved]').text().trim() === "" // Bazen boş konteynerler olabilir
+    ) {
+      // console.log('PROXY_PARSE_INFO: Skipping ad or irrelevant block.');
+      return; // Bu bir reklam veya alakasız blok, atla
+    }
+
+    // "People also ask", "Related searches" gibi özel blokları atlama girişimleri
+    if (resultElement.find('div[data-nosnippet="true"]').length > 0 ||
+        resultElement.find('g-accordion-expander').length > 0 || // "People also ask" için yaygın
+        resultElement.find('div[role="heading"][aria-level="2"]:contains("People also ask")').length > 0 ||
+        resultElement.find('div[role="heading"][aria-level="2"]:contains("Related searches")').length > 0 ||
+        resultElement.find('div[role="heading"][aria-level="2"]:contains("Top stories")').length > 0 ||
+        resultElement.find('div[role="heading"][aria-level="2"]:contains("Videos")').length > 0 ) {
+        // console.log('PROXY_PARSE_INFO: Skipping special block (PAA, Related, etc.).');
+      return;
+    }
+    
+    // Boş veya çok kısa blokları atla
+    if (resultElement.text().trim().length < 50) { // Eşik değeri ayarlanabilir
+        // console.log('PROXY_PARSE_INFO: Skipping short/empty block.');
+        return;
+    }
+
+    const titleElement = resultElement.find('h3').first(); // Genellikle başlık h3 içindedir
+    let title = titleElement.text().trim();
+    
+    // Bazen başlık h3'ün içindeki bir linkin metni olabilir
+    if (!title && titleElement.find('a').length > 0) {
+        title = titleElement.find('a').first().text().trim();
+    }
+    // Alternatif başlık seçicileri (Google yapısı değişirse)
+    if (!title) {
+        title = resultElement.find('a[h="ID=SERP"] h3').first().text().trim();
+    }
+     if (!title) {
+        title = resultElement.find('div[role="heading"][aria-level="3"]').first().text().trim();
+    }
+
+
+    const linkElement = resultElement.find('a[href]').first(); // İlk anlamlı linki al
+    let url = linkElement.attr('href');
+
+    if (url && url.startsWith('/url?q=')) {
+      const urlParams = new URLSearchParams(url.substring(url.indexOf('?')));
+      url = urlParams.get('q') || url;
+    }
+
+    // URL'leri doğrula ve filtrele
+    if (!url || !url.startsWith('http') || 
+        url.includes('google.com/search') || 
+        url.includes('google.com/imgres') ||
+        url.includes('google.com/maps') ||
+        url.includes('google.com/preferences') ||
+        url.includes('accounts.google.com') ||
+        url.includes('support.google.com') ||
+        url.includes('policies.google.com') ||
+        url.includes('webcache.googleusercontent.com') ||
+        seenUrls.has(url) // Yinelenenleri atla
+       ) {
+      // console.log(`PROXY_PARSE_INFO: Skipping invalid or Google-internal URL: ${url}`);
+      return;
+    }
+
+    // Snippet'i al (çeşitli potansiyel seçiciler)
+    let snippet = resultElement.find('div.VwiC3b, div.s, div.st, div[data-sncf="1"], div.Uroaid').first().text().trim();
+    // Bazen snippet birden fazla span içinde bölünebilir
+    if (!snippet) {
+        snippet = resultElement.find('div[style="-webkit-line-clamp:2"], div[style="-webkit-line-clamp:3"]').first().text().trim();
+    }
+     if (!snippet) {
+        // En genel fallback, blok içindeki metin
+        let potentialSnippet = "";
+        resultElement.find('span').each((idx, spanEl) => {
+            const spanText = $(spanEl).text().trim();
+            if (spanText.length > 20) { // Çok kısa spanları atla
+                potentialSnippet += spanText + " ";
+            }
+        });
+        snippet = potentialSnippet.trim();
+    }
+
+
+    if (title && url && title.length > 5 && snippet.length > 10) { // Temel geçerlilik kontrolü
+      results.push({
+        title: title,
+        url: url,
+        snippet: snippet,
+        source: 'Bright Data SERP (Cheerio)'
+      });
+      seenUrls.add(url); // Görülen URL'lere ekle
+    } else {
+      // console.log(`PROXY_PARSE_WARN: Missing title, URL, or snippet for a block. Title: "${title}", URL: "${url}"`);
+    }
+  });
+  
+  // console.log(`PROXY_PARSE_INFO: Extracted ${results.length} results using Cheerio.`);
+
+  if (results.length === 0) {
+    // console.warn(`PROXY_PARSE_WARN: No results extracted for query "${query}". Returning fallback.`);
+    return [{
+      title: `No organic results found for "${query}"`,
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+      snippet: "Could not extract organic search results. Google\'s HTML structure might have changed or no relevant results were found.",
+      source: "Bright Data SERP (Cheerio Fallback)"
+    }];
+  }
+
   return results;
 }
 
