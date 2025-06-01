@@ -283,13 +283,26 @@ app.get('/api/brightdataget', async (req, res) => {
 
 // Google HTML parser function with Cheerio
 function parseGoogleHTMLWithCheerio(html, query) {
-  console.log('PROXY_PARSE_RAW_HTML_START:', html.substring(0, 8000)); // Log first 8000 chars of HTML
+  console.log('PROXY_PARSE_RAW_HTML_START:', html.substring(0, 500)); // Log first 500 chars of HTML for brevity
   if (!html || typeof html !== 'string') {
     console.warn('PROXY_PARSE_WARN: HTML content is missing or not a string.');
     return [];
   }
   
-  const $ = cheerio.load(html);
+  let $;
+  try {
+    $ = cheerio.load(html);
+  } catch (e) {
+    console.error('PROXY_PARSE_ERROR: Cheerio failed to load HTML.', e.message, e.stack?.substring(0, 300));
+    // Return a fallback structure that indicates a parsing error upstream
+    return [{
+      title: `Error parsing HTML for "${query}"`, 
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+      snippet: "Internal proxy error: Cheerio could not load the HTML content from Bright Data.",
+      source: "Bright Data SERP (Cheerio Load Error)"
+    }];
+  }
+
   const results = [];
   const seenUrls = new Set(); // Yinelenen URL'leri engellemek için
 
@@ -407,15 +420,18 @@ function parseGoogleHTMLWithCheerio(html, query) {
   // console.log(`PROXY_PARSE_INFO: Extracted ${results.length} results after loop.`);
 
   if (results.length === 0) {
-    // console.warn(`PROXY_PARSE_FINAL_WARN: No organic results extracted for query "${query}". Returning fallback.`);
-    return [{
+    console.warn(`PROXY_PARSE_FINAL_WARN: No organic results extracted for query "${query}". Returning fallback.`);
+    const fallbackResult = [{
       title: `No organic results found for "${query}"`,
       url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
       snippet: "Could not extract organic search results. Google's HTML structure might have changed or no relevant results were found.",
       source: "Bright Data SERP (Cheerio Fallback)"
     }];
+    console.log('PROXY_PARSE_DEBUG: Fallback result being returned:', JSON.stringify(fallbackResult));
+    return fallbackResult;
   }
 
+  console.log(`PROXY_PARSE_DEBUG: Successfully extracted ${results.length} results. Returning:`, JSON.stringify(results.slice(0,2))); // Log first 2 results for brevity
   return results;
 }
 
