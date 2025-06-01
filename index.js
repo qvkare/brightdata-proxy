@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 
 dotenv.config();
 
