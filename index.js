@@ -283,6 +283,7 @@ app.get('/api/brightdataget', async (req, res) => {
 
 // Google HTML parser function with Cheerio
 function parseGoogleHTMLWithCheerio(html, query) {
+  console.log('PROXY_PARSE_RAW_HTML_START:', html.substring(0, 8000)); // Log first 8000 chars of HTML
   if (!html || typeof html !== 'string') {
     console.warn('PROXY_PARSE_WARN: HTML content is missing or not a string.');
     return [];
